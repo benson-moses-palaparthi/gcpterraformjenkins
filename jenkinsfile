@@ -4,14 +4,14 @@ pipeline {
     environment {
         // GitHub repository details
         GITHUB_REPO = 'git@github.com:<username>/<repo>.git'
-        GITHUB_TOKEN = credentials('github-token') // Stored in Jenkins credentials
+        GITHUB_TOKEN = credentials('github-token') // GitHub token from Jenkins credentials
         GKE_CLUSTER_NAME = '<your-cluster-name>'
         GKE_ZONE = '<your-cluster-zone>'
         GCP_PROJECT_ID = '<your-gcp-project-id>'
         CLOUD_COMPOSER_ENV = '<your-cloud-composer-env>'
-        TF_VAR_token = credentials('terraform-token') // Terraform provider token
-        DOCKER_IMAGE = 'gcr.io/<your-gcp-project-id>/<your-image-name>:latest' // Docker image name
-        DOCKER_REGISTRY = 'gcr.io' // Google Container Registry
+        DOCKER_IMAGE = 'gcr.io/<your-gcp-project-id>/<your-image-name>:latest'
+        DOCKER_REGISTRY = 'gcr.io'
+        GOOGLE_CREDENTIALS = credentials('google-cloud-credentials') // Google Cloud credentials stored in Jenkins
     }
 
     stages {
@@ -24,10 +24,24 @@ pipeline {
             }
         }
 
+        stage('Authenticate with Google Cloud') {
+            steps {
+                script {
+                    // Authenticate with Google Cloud using the service account credentials
+                    withCredentials([file(credentialsId: 'google-cloud-credentials', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
+                        sh '''
+                            gcloud auth activate-service-account --key-file=${GOOGLE_APPLICATION_CREDENTIALS}
+                            gcloud config set project ${GCP_PROJECT_ID}
+                        '''
+                    }
+                }
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
                 script {
-                    // Build the Docker image from the Dockerfile in the repo
+                    // Build the Docker image
                     sh '''
                         docker build -t ${DOCKER_IMAGE} .
                     '''
@@ -38,7 +52,7 @@ pipeline {
         stage('Push Docker Image to Registry') {
             steps {
                 script {
-                    // Push the built Docker image to Google Container Registry
+                    // Push the Docker image to Google Container Registry
                     sh '''
                         docker push ${DOCKER_IMAGE}
                     '''
@@ -49,7 +63,7 @@ pipeline {
         stage('Initialize Terraform') {
             steps {
                 script {
-                    // Initialize Terraform configuration
+                    // Initialize Terraform
                     sh '''
                         terraform init
                     '''
@@ -104,7 +118,7 @@ pipeline {
         stage('Trigger Cloud Composer DAG') {
             steps {
                 script {
-                    // Trigger a Cloud Composer DAG using gcloud CLI
+                    // Trigger a Cloud Composer DAG
                     sh '''
                         gcloud composer environments run ${CLOUD_COMPOSER_ENV} --location ${GKE_ZONE} trigger_dag -- <dag-name>
                     '''
@@ -130,14 +144,10 @@ pipeline {
 
     post {
         always {
-            // Clean up or notify failure
             echo 'Pipeline finished.'
         }
         success {
             echo 'Pipeline executed successfully.'
         }
         failure {
-            echo 'Pipeline failed. Check the logs.'
-        }
-    }
-}
+            ech
