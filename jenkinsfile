@@ -1,0 +1,143 @@
+pipeline {
+    agent any
+
+    environment {
+        // GitHub repository details
+        GITHUB_REPO = 'git@github.com:<username>/<repo>.git'
+        GITHUB_TOKEN = credentials('github-token') // Stored in Jenkins credentials
+        GKE_CLUSTER_NAME = '<your-cluster-name>'
+        GKE_ZONE = '<your-cluster-zone>'
+        GCP_PROJECT_ID = '<your-gcp-project-id>'
+        CLOUD_COMPOSER_ENV = '<your-cloud-composer-env>'
+        TF_VAR_token = credentials('terraform-token') // Terraform provider token
+        DOCKER_IMAGE = 'gcr.io/<your-gcp-project-id>/<your-image-name>:latest' // Docker image name
+        DOCKER_REGISTRY = 'gcr.io' // Google Container Registry
+    }
+
+    stages {
+        stage('Checkout GitHub Repo') {
+            steps {
+                script {
+                    // Checkout the GitHub repository
+                    git branch: 'main', url: "${env.GITHUB_REPO}"
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    // Build the Docker image from the Dockerfile in the repo
+                    sh '''
+                        docker build -t ${DOCKER_IMAGE} .
+                    '''
+                }
+            }
+        }
+
+        stage('Push Docker Image to Registry') {
+            steps {
+                script {
+                    // Push the built Docker image to Google Container Registry
+                    sh '''
+                        docker push ${DOCKER_IMAGE}
+                    '''
+                }
+            }
+        }
+
+        stage('Initialize Terraform') {
+            steps {
+                script {
+                    // Initialize Terraform configuration
+                    sh '''
+                        terraform init
+                    '''
+                }
+            }
+        }
+
+        stage('Terraform Plan for Kubernetes') {
+            steps {
+                script {
+                    // Run terraform plan for Kubernetes resources
+                    sh '''
+                        terraform plan -var="token=${TF_VAR_token}"
+                    '''
+                }
+            }
+        }
+
+        stage('Apply Terraform for Kubernetes') {
+            steps {
+                script {
+                    // Apply Terraform to deploy Kubernetes resources
+                    sh '''
+                        terraform apply -auto-approve -var="token=${TF_VAR_token}"
+                    '''
+                }
+            }
+        }
+
+        stage('Configure GKE Cluster') {
+            steps {
+                script {
+                    // Authenticate and configure kubectl with GKE
+                    sh '''
+                        gcloud container clusters get-credentials ${GKE_CLUSTER_NAME} --zone ${GKE_ZONE} --project ${GCP_PROJECT_ID}
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy Docker Container to Kubernetes') {
+            steps {
+                script {
+                    // Update Kubernetes deployment with the new Docker image
+                    sh '''
+                        kubectl set image deployment/my-deployment my-container=${DOCKER_IMAGE} --record
+                    '''
+                }
+            }
+        }
+
+        stage('Trigger Cloud Composer DAG') {
+            steps {
+                script {
+                    // Trigger a Cloud Composer DAG using gcloud CLI
+                    sh '''
+                        gcloud composer environments run ${CLOUD_COMPOSER_ENV} --location ${GKE_ZONE} trigger_dag -- <dag-name>
+                    '''
+                }
+            }
+        }
+
+        stage('Push Terraform Changes to GitHub') {
+            steps {
+                script {
+                    // Push any Terraform or code changes to GitHub
+                    sh '''
+                        git config --global user.email "jenkins@company.com"
+                        git config --global user.name "Jenkins CI"
+                        git add .
+                        git commit -m "Automated Terraform, Docker, and Kubernetes updates"
+                        git push origin main
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            // Clean up or notify failure
+            echo 'Pipeline finished.'
+        }
+        success {
+            echo 'Pipeline executed successfully.'
+        }
+        failure {
+            echo 'Pipeline failed. Check the logs.'
+        }
+    }
+}
